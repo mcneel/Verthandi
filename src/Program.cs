@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices.WindowsRuntime;
 using System.Threading;
 
 namespace Verthandi
@@ -13,7 +14,6 @@ namespace Verthandi
     {
       Console.ForegroundColor = ConsoleColor.Black;
       Console.BackgroundColor = ConsoleColor.White;
-      Console.Clear();
 
       Assembly assembly = Assembly.GetAssembly(typeof(Program));
       if (assembly == null)
@@ -25,100 +25,64 @@ namespace Verthandi
       }
 
       string name = System.IO.Path.GetFileNameWithoutExtension(assembly.Location);
-      Write("This application is tracking time for category: ");
-      WriteLine(ConsoleColor.DarkGreen, name);
-      WriteLine();
-
       HistoryFile = System.IO.Path.ChangeExtension(assembly.Location, "txt");
       History = History.LoadFromFile(HistoryFile);
       CurrentTrack = null;
       Recording = false;
 
-      WriteLine(ConsoleColor.DarkGreen, History.ToString());
-      WriteLine();
-
-      WriteLine("The following commands are available:");
-      Write(ConsoleColor.Blue, "  S"); WriteLine(" = Show summary of all tracked time.");
-      Write(ConsoleColor.Blue, "  P"); WriteLine(" = Pause tracking, but do not close application.");
-      Write(ConsoleColor.Blue, "  Q"); WriteLine(" = Quit tracking, and close application.");
-      Write(ConsoleColor.Blue, "  R"); WriteLine(" = Resume or begin tracking.");
-
-      Write(ConsoleColor.Blue, "  +"); WriteLine(" = Add custom time span");
-      Write(ConsoleColor.Blue, "  -"); WriteLine(" = Subtract custom time span");
-      WriteLine();
-
       while (true)
       {
+        Console.Clear();
+        Write("This application is tracking time for category: ");
+        WriteLine(ConsoleColor.DarkGreen, name);
         WriteLine();
-        WriteLine("Type a command: [S P Q R + -]");
 
-        var key = Console.ReadKey(true);
-        switch (char.ToUpperInvariant(key.KeyChar))
+        WriteLine(ConsoleColor.DarkGreen, History.ToString());
+        WriteLine();
+
+        ConsoleGetter getter = new ConsoleGetter();
+        getter.AddOption("S", "Show summary of tracked time.", () => History.ShowSummary(), ConsoleColor.Blue);
+        getter.AddOption("P", "Pause tracking, but do not close application.", () => Recording = false, ConsoleColor.Blue);
+        getter.AddOption("Q", "Quit tracking, and close application.", ShutDown, ConsoleColor.Blue);
+        getter.AddOption("R", "Resume or begin tracking.", () => Recording = true, ConsoleColor.Blue);
+        getter.AddOption("+", "Add custom time span.", AddCustomSpan);
+        getter.AddOption("-", "Subtract a custom time span.", SubtractCustomSpan);
+
+        getter.GetOption(true);
+      }
+    }
+    private static void ShutDown()
+    {
+      Recording = false;
+      Write(ConsoleColor.DarkMagenta, "Shutting down");
+      for (int i = 0; i < 10; i++)
+      {
+        Thread.Sleep(50);
+        Write(ConsoleColor.Magenta, ".");
+      }
+      Environment.Exit(0);
+    }
+    private static void AddCustomSpan()
+    {
+      if (GetSpan("n incremental", out TimeSpan span))
+      {
+        Track addition = new Track(DateTime.Now, span);
+        lock (_lock)
         {
-          case 'Q':
-            Recording = false;
-            Write(ConsoleColor.DarkMagenta, "Shutting down");
-            for (int i = 0; i < 10; i++)
-            {
-              Thread.Sleep(50);
-              Write(ConsoleColor.Magenta, ".");
-            }
-            return;
-
-          case 'P':
-            Recording = false;
-            Write("Time tracking is now ");
-            Write(ConsoleColor.DarkRed, "disabled");
-            WriteLine(".");
-            break;
-
-          case 'R':
-            Recording = true;
-            Write("Time tracking is now ");
-            Write(ConsoleColor.DarkGreen, "enabled");
-            WriteLine(".");
-            break;
-
-          case '+':
-          case '=':
-            WriteLine("Enter the number of minutes you wish to add, followed by Enter.");
-            string add = Console.ReadLine();
-            if (int.TryParse(add, out int minutes))
-            {
-              Track addition = new Track(DateTime.UtcNow, TimeSpan.FromMinutes(minutes));
-              lock (_lock)
-              {
-                History = History.AppendTrack(addition);
-                History.SaveToFile(HistoryFile);
-              }
-            }
-            else
-              WriteLine(ConsoleColor.Red, "That was not a valid integer number.");
-            break;
-
-          case '-':
-          case '_':
-            WriteLine("Enter the number of minutes you wish to subtract, followed by Enter.");
-            string sub = Console.ReadLine();
-            if (int.TryParse(sub, out minutes))
-            {
-              Track subtraction = new Track(DateTime.UtcNow, TimeSpan.FromMinutes(-minutes));
-              lock (_lock)
-              {
-                History = History.AppendTrack(subtraction);
-                History.SaveToFile(HistoryFile);
-              }
-            }
-            else
-              WriteLine(ConsoleColor.Red, "That was not a valid integer number.");
-            break;
-
-          case 'S':
-            History.ShowSummary();
-            break;
-
-          default:
-            continue;
+          History = History.AppendTrack(addition);
+          History.SaveToFile(HistoryFile);
+        }
+      }
+    }
+    private static void SubtractCustomSpan()
+    {
+      if (GetSpan(" decremental", out TimeSpan span))
+      {
+        Track addition = new Track(DateTime.Now, new TimeSpan(-span.Ticks));
+        lock (_lock)
+        {
+          History = History.AppendTrack(addition);
+          History.SaveToFile(HistoryFile);
         }
       }
     }
@@ -150,12 +114,6 @@ namespace Verthandi
       Console.WriteLine();
     }
 
-    /// <summary>
-    /// Show a prompt for a date.
-    /// </summary>
-    /// <param name="description">Prompt to be inserted into "Specify a{0} date."</param>
-    /// <param name="date">Resulting date.</param>
-    /// <returns>True if a valid date was entered.</returns>
     public static bool GetDate(string description, out DateTime date)
     {
       date = DateTime.MinValue;
@@ -172,18 +130,27 @@ namespace Verthandi
       if (parts.Length < 2 || parts.Length > 3)
       {
         WriteLine(ConsoleColor.Red, "That is not a valid date format.");
+        WriteLine(ConsoleColor.Red, "Press Enter to try again, anything else to abort.");
+        if (Console.ReadKey(true).Key == ConsoleKey.Enter)
+          return GetDate(description, out date);
         return false;
       }
 
       if (!int.TryParse(parts[0], out int day))
       {
         WriteLine(ConsoleColor.Red, "The day isn't a number.");
+        WriteLine(ConsoleColor.Red, "Press Enter to try again, anything else to abort.");
+        if (Console.ReadKey(true).Key == ConsoleKey.Enter)
+          return GetDate(description, out date);
         return false;
       }
 
       if (!int.TryParse(parts[1], out int month))
       {
         WriteLine(ConsoleColor.Red, "The month isn't a number.");
+        WriteLine(ConsoleColor.Red, "Press Enter to try again, anything else to abort.");
+        if (Console.ReadKey(true).Key == ConsoleKey.Enter)
+          return GetDate(description, out date);
         return false;
       }
 
@@ -193,6 +160,9 @@ namespace Verthandi
         if (!int.TryParse(parts[2], out year))
         {
           WriteLine(ConsoleColor.Red, "The year isn't a number.");
+          WriteLine(ConsoleColor.Red, "Press Enter to try again, anything else to abort.");
+          if (Console.ReadKey(true).Key == ConsoleKey.Enter)
+            return GetDate(description, out date);
           return false;
         }
       }
@@ -205,6 +175,88 @@ namespace Verthandi
       catch
       {
         WriteLine(ConsoleColor.Red, "This is not a valid date.");
+        WriteLine(ConsoleColor.Red, "Press Enter to try again, anything else to abort.");
+        if (Console.ReadKey(true).Key == ConsoleKey.Enter)
+          return GetDate(description, out date);
+        return false;
+      }
+    }
+    public static bool GetSpan(string description, out TimeSpan span)
+    {
+      span = TimeSpan.Zero;
+
+      Console.WriteLine("Specify a{0} duration in minutes, or type \"more\" for detailed input:", description);
+      var result = Console.ReadLine();
+      if (result == null)
+        return false;
+
+      if (string.Equals(result, "more", StringComparison.OrdinalIgnoreCase) ||
+          string.Equals(result, "m", StringComparison.OrdinalIgnoreCase))
+      {
+        Console.WriteLine("Specify a{0} duration in the format hours:minutes:seconds", description);
+        result = Console.ReadLine();
+        if (result == null)
+          return false;
+
+        string[] segments = result.Split(':');
+        if (segments.Length < 2)
+        {
+          WriteLine(ConsoleColor.Red, "Too few numbers specified.");
+          WriteLine(ConsoleColor.Red, "Press Enter to try again, anything else to abort.");
+          if (Console.ReadKey(true).Key == ConsoleKey.Enter)
+            return GetSpan(description, out span);
+          return false;
+        }
+        if (segments.Length > 3)
+        {
+          WriteLine(ConsoleColor.Red, "Too many numbers specified.");
+          WriteLine(ConsoleColor.Red, "Press Enter to try again, anything else to abort.");
+          if (Console.ReadKey(true).Key == ConsoleKey.Enter)
+            return GetSpan(description, out span);
+          return false;
+        }
+
+        if (!int.TryParse(segments[0], out int hours))
+        {
+          WriteLine(ConsoleColor.Red, "The hours portion isn't a number.");
+          WriteLine(ConsoleColor.Red, "Press Enter to try again, anything else to abort.");
+          if (Console.ReadKey(true).Key == ConsoleKey.Enter)
+            return GetSpan(description, out span);
+          return false;
+        }
+        if (!int.TryParse(segments[1], out int minutes))
+        {
+          WriteLine(ConsoleColor.Red, "The minutes portion isn't a number.");
+          WriteLine(ConsoleColor.Red, "Press Enter to try again, anything else to abort.");
+          if (Console.ReadKey(true).Key == ConsoleKey.Enter)
+            return GetSpan(description, out span);
+          return false;
+        }
+        int seconds = 0;
+        if (segments.Length > 2)
+          if (!int.TryParse(segments[2], out seconds))
+          {
+            WriteLine(ConsoleColor.Red, "The seconds portion isn't a number.");
+            WriteLine(ConsoleColor.Red, "Press Enter to try again, anything else to abort.");
+            if (Console.ReadKey(true).Key == ConsoleKey.Enter)
+              return GetSpan(description, out span);
+            return false;
+          }
+
+        span = new TimeSpan(hours, minutes, seconds);
+        return true;
+      }
+      else
+      {
+        if (int.TryParse(result, out int minutes))
+        {
+          span = TimeSpan.FromMinutes(minutes);
+          return true;
+        }
+        WriteLine(ConsoleColor.Red, "I don't know what you call this, but it's not a number.");
+        WriteLine(ConsoleColor.Red, "Press Enter to try again, anything else to abort.");
+        if (Console.ReadKey(true).Key == ConsoleKey.Enter)
+          return GetSpan(description, out span);
         return false;
       }
     }
@@ -224,11 +276,16 @@ namespace Verthandi
 
           lock (_lock)
           {
-            DateTime t0 = DateTime.UtcNow;
+            DateTime t0 = DateTime.Now;
             CurrentTrack = new Track(t0, t0);
 
             _timer = new Timer(TimerCallback);
             _timer.Change(1000, 1000);
+
+            Write("Time tracking is now ");
+            Write(ConsoleColor.DarkGreen, "enabled");
+            WriteLine(".");
+
             Console.Title = "Recording";
           }
         }
@@ -246,6 +303,10 @@ namespace Verthandi
 
             History = History.AppendTrack(CurrentTrack);
             History.SaveToFile(HistoryFile);
+
+            Write("Time tracking is now ");
+            Write(ConsoleColor.DarkGreen, "disabled");
+            WriteLine(".");
           }
         }
       }
@@ -263,7 +324,7 @@ namespace Verthandi
           Track track = CurrentTrack;
           if (track == null)
           {
-            DateTime now = DateTime.UtcNow;
+            DateTime now = DateTime.Now;
             track = new Track(now, now);
           }
           else
@@ -280,9 +341,105 @@ namespace Verthandi
           History localHistory = History.AppendTrack(track);
           localHistory.SaveToFile(HistoryFile);
 
-          Console.Title = string.Format("Now tracking: {0:hh\\:mm\\:ss}", track.Duration);
+          Console.Title = string.Format(
+            "Currently tracking: {0:hh\\:mm\\:ss}, total time today: {1}", 
+            track.Duration, 
+            History.FormatDuration(localHistory.TimeToday()));
         }
       }
+    }
+  }
+
+  /// <summary>
+  /// Utility for getting console options.
+  /// </summary>
+  public sealed class ConsoleGetter
+  {
+    private readonly List<string> _names = new List<string>();
+    private readonly List<string> _desc = new List<string>();
+    private readonly List<Action> _actions = new List<Action>();
+    private readonly List<ConsoleColor?> _colours = new List<ConsoleColor?>();
+    private bool _singleCharacterOptions = true;
+
+    /// <summary>
+    /// Add an option to the getter.
+    /// </summary>
+    /// <param name="name">Name of option.</param>
+    /// <param name="description">Description of option.</param>
+    /// <param name="action">Action.</param>
+    /// <param name="colour">Optional colour of option.</param>
+    /// <returns>True if option was added.</returns>
+    public bool AddOption(string name, string description, Action action, ConsoleColor? colour = null)
+    {
+      if (string.IsNullOrWhiteSpace(name)) throw new ArgumentNullException(nameof(name));
+      if (string.IsNullOrWhiteSpace(description)) throw new ArgumentNullException(nameof(description));
+      if (action == null) throw new ArgumentNullException(nameof(action));
+
+      if (_names.Contains(name))
+        return false;
+
+      if (name.Length > 1)
+        _singleCharacterOptions = false;
+
+      _names.Add(name);
+      _desc.Add(description);
+      _actions.Add(action);
+      _colours.Add(colour);
+      return true;
+    }
+
+    /// <summary>
+    /// Show the getter prompt.
+    /// </summary>
+    public bool GetOption(bool includeExplanation)
+    {
+      if (_names.Count == 0)
+        return false;
+
+      if (includeExplanation)
+      {
+        Program.WriteLine("The following options are available:");
+        for (int i = 0; i < _names.Count; i++)
+        {
+          Program.Write("  ");
+          if (_colours[i].HasValue)
+            Program.Write(_colours[i].Value, _names[i]);
+          else
+            Program.Write(_names[i]);
+          Program.Write(" = ");
+          Program.WriteLine(_desc[i]);
+        }
+      }
+
+      Program.WriteLine();
+      Program.Write("Pick an option [");
+      for (int i = 0; i < _names.Count; i++)
+      {
+        if (i > 0) Program.Write(" ");
+        if (_colours[i].HasValue)
+          Program.Write(_colours[i].Value, _names[i]);
+        else
+          Program.Write(_names[i]);
+      }
+      Program.Write("]: ");
+
+      string result;
+      if (_singleCharacterOptions)
+      {
+        result = Console.ReadKey(true).KeyChar.ToString();
+        Console.WriteLine();
+      }
+      else
+        result = Console.ReadLine();
+
+      for (int i = 0; i < _names.Count; i++)
+        if (string.Equals(result, _names[i], StringComparison.OrdinalIgnoreCase))
+        {
+          _actions[i].Invoke();
+          return true;
+        }
+
+      return false;
     }
   }
 
@@ -395,13 +552,29 @@ namespace Verthandi
         total += track.Duration;
       return total;
     }
+    /// <summary>
+    /// Measure the total time tracked today.
+    /// </summary>
+    public TimeSpan TimeToday()
+    {
+      DateTime now = DateTime.Now;
+      DateTime today = new DateTime(now.Year, now.Month, now.Day);
+
+      TimeSpan total = TimeSpan.Zero;
+      for (int i = _tracks.Length - 1; i >= 0; i--)
+        if (_tracks[i].Start < today)
+          break;
+        else
+          total += _tracks[i].Duration;
+      return total;
+    }
 
     /// <summary>
     /// Show the summary.
     /// </summary>
     public void ShowSummary()
     {
-      DateTime now = DateTime.UtcNow;
+      DateTime now = DateTime.Now;
       DateTime today = new DateTime(now.Year, now.Month, now.Day);
       DateTime yesterday = today.AddDays(-1);
       DateTime week = today.AddDays(-1 * (7 + (now.DayOfWeek - DayOfWeek.Monday)) % 7);
@@ -450,7 +623,7 @@ namespace Verthandi
     /// <summary>
     /// Format a duration into hours and minutes.
     /// </summary>
-    private static string FormatDuration(TimeSpan span)
+    public static string FormatDuration(TimeSpan span)
     {
       double hours = Math.Floor(span.TotalHours);
       double minutes = span.Minutes;
@@ -475,7 +648,7 @@ namespace Verthandi
       TimeSpan total = TimeSpan.Zero;
       TimeSpan monthly = TimeSpan.Zero;
 
-      DateTime now = DateTime.UtcNow;
+      DateTime now = DateTime.Now;
       DateTime thisMonth = new DateTime(now.Year, now.Month, 1);
       foreach (var track in _tracks)
       {
@@ -600,13 +773,13 @@ namespace Verthandi
     }
 
     /// <summary>
-    /// Extend the track end-time to UtcNow.
+    /// Extend the track end-time to Now.
     /// This does not work for custom tracks.
     /// </summary>
     /// <returns>Extended track.</returns>
     public Track Update()
     {
-      return Update(DateTime.UtcNow);
+      return Update(DateTime.Now);
     }
     /// <summary>
     /// Extend the track end-time to a new end time.
